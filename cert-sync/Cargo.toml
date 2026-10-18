@@ -1,0 +1,22 @@
+[package]
+name = "cert-sync"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89" # std::fs::File::try_lock
+description = "Client für cert-api: prüft auf neue Zertifikate und installiert sie"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+time = { version = "0.3", features = ["formatting"] }
+toml = "0.8"
+x509-parser = "0.17"
+
+[dev-dependencies]
+tempfile = "3"

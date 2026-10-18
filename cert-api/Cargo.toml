@@ -1,0 +1,25 @@
+[package]
+name = "cert-api"
+version = "0.1.0"
+edition = "2021"
+description = "REST-API, die Let's-Encrypt-Zertifikate pro API-Key bereitstellt"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x509-parser = "0.17"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

@@ -1,0 +1,89 @@
+name: Release
+
+# Release wird durch einen Tag wie v0.1.0 ausgelöst:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            name: linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            name: linux-arm64          # Raspberry Pi 4/5 mit 64-Bit-OS
+          - target: armv7-unknown-linux-musleabihf
+            name: linux-armv7          # Raspberry Pi 4 mit 32-Bit-OS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (statisch gelinkt, musl)
+        run: cross build --release --workspace --target ${{ matrix.target }}
+
+      - name: Paket schnüren
+        run: |
+          set -euo pipefail
+          DIR="cert-distributor-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          BIN="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$DIR/examples"
+          cp "$BIN/cert-api" "$BIN/cert-sync" "dist/$DIR/"
+          cp cert-api/config.example.toml cert-api/nginx.conf.example \
+             cert-sync/cert-sync.example.toml cert-sync/cert-sync.cron.example \
+             "dist/$DIR/examples/"
+          cp -r scripts deploy README.md "dist/$DIR/"
+          tar -C dist -czf "dist/$DIR.tar.gz" "$DIR"
+          (cd dist && sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release erstellen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

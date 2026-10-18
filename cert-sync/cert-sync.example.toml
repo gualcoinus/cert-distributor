@@ -1,0 +1,25 @@
+# /etc/cert-sync/cert-sync.toml   (chmod 600, Owner root – enthält die API-Keys)
+api_url = "https://certs.example.com"
+
+# Wird nach erfolgreichem Austausch ausgeführt (bei Fehler Rollback auf das alte Zertifikat).
+# Kann pro Zertifikat überschrieben werden; "" deaktiviert den Reload.
+reload_cmd = "nginx -t && systemctl reload nginx"
+
+# Optional (Defaults in Klammern)
+# keep_backups        = 5                              # (5)
+# warn_days           = 14                             # (14) Warnung, wenn lokal bald abläuft
+# splay_secs          = 600                            # (0)  zufällige Verzögerung beim Start
+# lock_file           = "/var/lock/cert-sync.lock"     # (/var/lock/cert-sync.lock)
+# key_gid             = 110                            # numerische GID, die privkey.pem lesen darf (Modus 640)
+# allow_insecure_http = false                          # nur für Tests
+
+[[certificates]]
+name = "example.com"                       # = Name in der cert-api
+api_key = "key_aus_add-cert.sh"
+target_dir = "/etc/ssl/example.com"        # hier landen fullchain.pem + privkey.pem
+
+[[certificates]]
+name = "mail.example.com"
+api_key = "anderer_key"
+target_dir = "/etc/ssl/mail.example.com"
+reload_cmd = "systemctl reload postfix dovecot"

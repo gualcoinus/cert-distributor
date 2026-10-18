@@ -1,0 +1,17 @@
+# Muss eine Loopback-Adresse sein, nginx macht TLS davor.
+listen = "127.0.0.1:8443"
+
+# Pro Zertifikat ein Block. Jedes Zertifikat hat einen eigenen API-Key (min. 32 Zeichen).
+# Key erzeugen:  openssl rand -hex 32
+[[certificates]]
+name = "example.com"
+api_key = "HIER_32+_ZEICHEN_LANGEN_ZUFALLSKEY_EINTRAGEN"
+# Aktuelles Zertifikat (certbot "live"-Verzeichnis mit fullchain.pem, privkey.pem, cert.pem, chain.pem)
+live_path = "/etc/letsencrypt/live/example.com"
+# Optional: alle Versionen inkl. abgelaufener (certbot "archive"-Verzeichnis)
+archive_path = "/etc/letsencrypt/archive/example.com"
+
+[[certificates]]
+name = "mail.example.com"
+api_key = "EIN_ANDERER_KEY_MIT_MINDESTENS_32_ZEICHEN"
+live_path = "/etc/letsencrypt/live/mail.example.com"

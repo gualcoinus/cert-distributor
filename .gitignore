@@ -1,0 +1,13 @@
+/target
+
+# Echte Konfigurationen mit API-Keys niemals committen
+/config.toml
+/cert-sync.toml
+**/config.toml
+**/cert-sync.toml
+*.bak.*
+
+# Zertifikate/Schlüssel – außer den Test-Fixtures
+*.pem
+*.key
+!testdata/*.pem

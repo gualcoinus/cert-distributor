@@ -1,0 +1,2 @@
+# /etc/cron.d/cert-sync – täglich um 03:17 Uhr
+17 3 * * * root /usr/local/bin/cert-sync -c /etc/cert-sync/cert-sync.toml >> /var/log/cert-sync.log 2>&1

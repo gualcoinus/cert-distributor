@@ -1,0 +1,31 @@
+# /etc/systemd/system/cert-api.service
+[Unit]
+Description=cert-api – Let's-Encrypt-Zertifikate per REST-API
+After=network.target
+
+[Service]
+User=cert-api
+Group=cert-api
+# Lesezugriff auf /etc/letsencrypt: z. B. eine Gruppe "ssl-cert" mit Leserechten auf live/ und archive/
+SupplementaryGroups=ssl-cert
+ExecStart=/usr/local/bin/cert-api /etc/cert-api/config.toml
+Restart=on-failure
+RestartSec=5
+
+# Härtung
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/etc/letsencrypt /etc/cert-api
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

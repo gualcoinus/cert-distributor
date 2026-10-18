@@ -1,0 +1,16 @@
+# /etc/cert-sync/cert-sync.conf   (chmod 600, Owner root)
+API_URL="https://certs.example.com"
+CERT_NAME="example.com"
+API_KEY="der_von_add-cert.sh_ausgegebene_key"
+
+# Hier landen fullchain.pem und privkey.pem
+TARGET_DIR="/etc/ssl/example.com"
+
+# Wird nach erfolgreichem Austausch ausgeführt (bei Fehler Rollback auf das alte Zertifikat)
+RELOAD_CMD="nginx -t && systemctl reload nginx"
+
+# Optional
+# FILE_GROUP="ssl-cert"     # Gruppe darf privkey.pem lesen (Modus 640)
+# KEEP_BACKUPS=5
+# SPLAY=600                 # zufällige Verzögerung bis 10 Min., entlastet die API bei vielen Clients
+# WARN_DAYS=14
