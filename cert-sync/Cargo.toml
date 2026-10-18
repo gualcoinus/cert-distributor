@@ -9,7 +9,7 @@ description = "Client für cert-api: prüft auf neue Zertifikate und installiert
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-tls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
