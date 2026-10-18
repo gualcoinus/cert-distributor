@@ -96,7 +96,10 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
-            ApiError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()),
+            ApiError::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error".to_string(),
+            ),
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
     }
@@ -157,8 +160,8 @@ struct CertInfo {
 
 /// Liest das erste Zertifikat aus einer PEM-Datei (bei fullchain.pem das Leaf).
 fn parse_cert_info(pem_bytes: &[u8]) -> anyhow::Result<CertInfo> {
-    let (_, pem) = x509_parser::pem::parse_x509_pem(pem_bytes)
-        .map_err(|e| anyhow!("PEM ungültig: {e:?}"))?;
+    let (_, pem) =
+        x509_parser::pem::parse_x509_pem(pem_bytes).map_err(|e| anyhow!("PEM ungültig: {e:?}"))?;
     let cert = pem
         .parse_x509()
         .map_err(|e| anyhow!("X.509 ungültig: {e:?}"))?;
@@ -225,7 +228,10 @@ fn pem_response(bytes: Vec<u8>) -> Response {
 
 /// Nur feste Dateinamen für das "live"-Verzeichnis (verhindert Path Traversal).
 fn live_file_allowed(file: &str) -> bool {
-    matches!(file, "cert.pem" | "chain.pem" | "fullchain.pem" | "privkey.pem")
+    matches!(
+        file,
+        "cert.pem" | "chain.pem" | "fullchain.pem" | "privkey.pem"
+    )
 }
 
 /// Archivdateien: <prefix><zahl>.pem, z.B. fullchain3.pem
@@ -355,7 +361,9 @@ async fn archive_list_handler(
     let mut versions = Vec::new();
     while let Some(entry) = rd.next_entry().await.map_err(internal)? {
         let fname = entry.file_name();
-        let Some(fname) = fname.to_str() else { continue };
+        let Some(fname) = fname.to_str() else {
+            continue;
+        };
         if let Some(n) = fname
             .strip_prefix("cert")
             .and_then(|s| s.strip_suffix(".pem"))
@@ -389,7 +397,11 @@ async fn archive_list_handler(
                 files.push(f);
             }
         }
-        out.push(ArchiveEntry { version: v, info, files });
+        out.push(ArchiveEntry {
+            version: v,
+            info,
+            files,
+        });
     }
     Ok(Json(out))
 }
@@ -428,8 +440,7 @@ fn build_router(state: Arc<AppState>) -> Router {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -472,8 +483,8 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use std::fs;
     use http_body_util::BodyExt;
+    use std::fs;
     use tower::ServiceExt;
 
     const CERT_PEM: &str = include_str!("../../testdata/test-cert.pem");
@@ -546,14 +557,25 @@ mod tests {
         for ok in ["cert.pem", "chain.pem", "fullchain.pem", "privkey.pem"] {
             assert!(live_file_allowed(ok));
         }
-        for bad in ["../etc/passwd", "privkey1.pem", "", "cert.pem/", "config.toml"] {
+        for bad in [
+            "../etc/passwd",
+            "privkey1.pem",
+            "",
+            "cert.pem/",
+            "config.toml",
+        ] {
             assert!(!live_file_allowed(bad), "{bad}");
         }
     }
 
     #[test]
     fn archive_file_whitelist() {
-        for ok in ["cert1.pem", "chain12.pem", "fullchain3.pem", "privkey999999.pem"] {
+        for ok in [
+            "cert1.pem",
+            "chain12.pem",
+            "fullchain3.pem",
+            "privkey999999.pem",
+        ] {
             assert!(archive_file_allowed(ok), "{ok}");
         }
         for bad in [
@@ -599,7 +621,10 @@ mod tests {
         let (_t, app) = setup(false);
         let uri = "/v1/certs/example.com/info";
         assert_eq!(get_req(&app, uri, None).await.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(get_req(&app, uri, Some("falsch")).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            get_req(&app, uri, Some("falsch")).await.0,
+            StatusCode::UNAUTHORIZED
+        );
         // unbekannter Name liefert dieselbe Antwort wie falscher Key
         let (status, _) = get_req(&app, "/v1/certs/gibts-nicht/info", Some(API_KEY)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -627,7 +652,12 @@ mod tests {
         let (_t, app) = setup(false);
         let base = "/v1/certs/example.com/check";
 
-        let (s, body) = get_req(&app, &format!("{base}?fingerprint={}", expected_fp()), Some(API_KEY)).await;
+        let (s, body) = get_req(
+            &app,
+            &format!("{base}?fingerprint={}", expected_fp()),
+            Some(API_KEY),
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["update_available"], false);
@@ -649,11 +679,21 @@ mod tests {
     #[tokio::test]
     async fn serves_live_files_only_from_whitelist() {
         let (_t, app) = setup(false);
-        let (s, body) = get_req(&app, "/v1/certs/example.com/files/privkey.pem", Some(API_KEY)).await;
+        let (s, body) = get_req(
+            &app,
+            "/v1/certs/example.com/files/privkey.pem",
+            Some(API_KEY),
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         assert!(body.contains("BEGIN PRIVATE KEY"));
 
-        let (s, _) = get_req(&app, "/v1/certs/example.com/files/secret.txt", Some(API_KEY)).await;
+        let (s, _) = get_req(
+            &app,
+            "/v1/certs/example.com/files/secret.txt",
+            Some(API_KEY),
+        )
+        .await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (s, _) = get_req(&app, "/v1/certs/example.com/files/privkey.pem", None).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
@@ -679,7 +719,12 @@ mod tests {
         assert_eq!(v[0]["version"], 1);
         assert_eq!(v[0]["info"]["fingerprint_sha256"], expected_fp());
 
-        let (s, _) = get_req(&app, "/v1/certs/example.com/archive/fullchain1.pem", Some(API_KEY)).await;
+        let (s, _) = get_req(
+            &app,
+            "/v1/certs/example.com/archive/fullchain1.pem",
+            Some(API_KEY),
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         let (s, _) = get_req(&app, "/v1/certs/example.com/archive/passwd", Some(API_KEY)).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
@@ -712,7 +757,10 @@ mod tests {
             "public.toml",
             &format!("listen = \"0.0.0.0:8443\"\n[[certificates]]\nname = \"a.de\"\napi_key = \"{key}\"\nlive_path = \"/x\"\n"),
         );
-        assert!(load_config(public.to_str().unwrap()).is_err(), "nicht-loopback muss abgelehnt werden");
+        assert!(
+            load_config(public.to_str().unwrap()).is_err(),
+            "nicht-loopback muss abgelehnt werden"
+        );
 
         let short = write(
             "short.toml",

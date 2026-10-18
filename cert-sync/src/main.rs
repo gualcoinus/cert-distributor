@@ -32,7 +32,10 @@ use x509_parser::parse_x509_certificate;
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(version, about = "Holt neue Zertifikate von der cert-api und installiert sie")]
+#[command(
+    version,
+    about = "Holt neue Zertifikate von der cert-api und installiert sie"
+)]
 struct Cli {
     /// Pfad zur Konfigurationsdatei
     #[arg(short, long, default_value = "/etc/cert-sync/cert-sync.toml")]
@@ -97,7 +100,10 @@ fn load_config(path: &Path) -> Result<Config> {
         if meta.permissions().mode() & 0o077 != 0 {
             warn(
                 "-",
-                format!("{} ist für Gruppe/Andere lesbar (empfohlen: chmod 600)", path.display()),
+                format!(
+                    "{} ist für Gruppe/Andere lesbar (empfohlen: chmod 600)",
+                    path.display()
+                ),
             );
         }
     }
@@ -132,7 +138,9 @@ fn load_config(path: &Path) -> Result<Config> {
 // ---------------------------------------------------------------------------
 
 fn ts() -> String {
-    OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default()
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default()
 }
 fn log(name: &str, msg: impl Display) {
     println!("{} cert-sync[{name}]: {msg}", ts());
@@ -165,7 +173,8 @@ struct CheckResponse {
 
 impl Api {
     fn new(http: &Client, base: &str, entry: &CertEntry) -> Result<Self> {
-        let mut key = HeaderValue::from_str(&entry.api_key).context("api_key enthält ungültige Zeichen")?;
+        let mut key =
+            HeaderValue::from_str(&entry.api_key).context("api_key enthält ungültige Zeichen")?;
         key.set_sensitive(true); // taucht nicht in Debug-Ausgaben auf
         Ok(Self {
             http: http.clone(),
@@ -330,7 +339,10 @@ fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result
     let cur_key = dir.join("privkey.pem");
     let api = Api::new(http, &cfg.api_url, entry)?;
 
-    fs::DirBuilder::new().recursive(true).mode(0o755).create(dir)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o755)
+        .create(dir)?;
 
     // --- 1. Lokalen Stand ermitteln -------------------------------------------------
     let local = match read_optional(&cur_cert)? {
@@ -338,7 +350,10 @@ fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result
         Some(bytes) => match load_chain(&bytes).and_then(|c| summarize(&c)) {
             Ok(s) => Some(s),
             Err(e) => {
-                warn(name, format!("Lokales Zertifikat unlesbar ({e:#}) – wird neu geladen"));
+                warn(
+                    name,
+                    format!("Lokales Zertifikat unlesbar ({e:#}) – wird neu geladen"),
+                );
                 None
             }
         },
@@ -347,13 +362,19 @@ fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result
     // --- 2. Gibt es ein neues Zertifikat? ---------------------------------------------
     match &local {
         None => log(name, "Kein lokales Zertifikat vorhanden – Erstabruf"),
-        Some(l) if cli.force => log(name, format!("--force: Abruf erzwungen ({}…)", &l.fingerprint[..16])),
+        Some(l) if cli.force => log(
+            name,
+            format!("--force: Abruf erzwungen ({}…)", &l.fingerprint[..16]),
+        ),
         Some(l) => {
             let body = api.get("check", &[("fingerprint", l.fingerprint.as_str())])?;
             let check: CheckResponse =
                 serde_json::from_slice(&body).context("Unerwartete Antwort der API")?;
             if !check.update_available {
-                log(name, format!("Zertifikat aktuell ({}…)", &l.fingerprint[..16]));
+                log(
+                    name,
+                    format!("Zertifikat aktuell ({}…)", &l.fingerprint[..16]),
+                );
                 let days_left = (l.not_after - now_unix()) / 86_400;
                 if days_left < cfg.warn_days {
                     warn(
@@ -384,7 +405,11 @@ fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result
     }
     ensure_key_matches(chain, &key_pem)?;
 
-    if !cli.force && local.as_ref().is_some_and(|l| l.fingerprint == new.fingerprint) {
+    if !cli.force
+        && local
+            .as_ref()
+            .is_some_and(|l| l.fingerprint == new.fingerprint)
+    {
         log(name, "Fingerprint unverändert – nichts zu tun");
         return Ok(Outcome::UpToDate);
     }
@@ -408,7 +433,10 @@ fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result
             .unwrap_or_default()
             .replace(':', "-");
         let b = dir.join("backup").join(stamp);
-        fs::DirBuilder::new().recursive(true).mode(0o700).create(&b)?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&b)?;
         fs::copy(&cur_cert, b.join("fullchain.pem"))?;
         fs::copy(&cur_key, b.join("privkey.pem"))?;
         Some(b)
@@ -440,7 +468,10 @@ fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result
                 fs::copy(b.join("privkey.pem"), &cur_key)?;
                 fs::copy(b.join("fullchain.pem"), &cur_cert)?;
                 let _ = run_reload(cmd);
-                warn(name, "Reload fehlgeschlagen – altes Zertifikat wiederhergestellt");
+                warn(
+                    name,
+                    "Reload fehlgeschlagen – altes Zertifikat wiederhergestellt",
+                );
             }
             return Err(e);
         }
@@ -566,7 +597,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("privkey.pem");
         write_file(&p, b"geheim", 0o600).unwrap();
-        assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(fs::read(&p).unwrap(), b"geheim");
         assert!(write_file(&p, b"neu", 0o600).is_err());
     }
@@ -615,12 +649,18 @@ mod tests {
         };
         let cert = "[[certificates]]\nname = \"a.de\"\napi_key = \"k\"\ntarget_dir = \"/x\"\n";
 
-        let ok = write("ok.toml", &format!("api_url = \"https://certs.example.com\"\n{cert}"));
+        let ok = write(
+            "ok.toml",
+            &format!("api_url = \"https://certs.example.com\"\n{cert}"),
+        );
         let cfg = load_config(&ok).unwrap();
         assert_eq!(cfg.keep_backups, 5);
         assert_eq!(cfg.warn_days, 14);
 
-        let http = write("http.toml", &format!("api_url = \"http://certs.example.com\"\n{cert}"));
+        let http = write(
+            "http.toml",
+            &format!("api_url = \"http://certs.example.com\"\n{cert}"),
+        );
         assert!(load_config(&http).is_err(), "http:// muss abgelehnt werden");
 
         let http_ok = write(
@@ -629,7 +669,10 @@ mod tests {
         );
         assert!(load_config(&http_ok).is_ok());
 
-        let dup = write("dup.toml", &format!("api_url = \"https://x.de\"\n{cert}{cert}"));
+        let dup = write(
+            "dup.toml",
+            &format!("api_url = \"https://x.de\"\n{cert}{cert}"),
+        );
         assert!(load_config(&dup).is_err());
 
         let bad = write(
@@ -638,7 +681,10 @@ mod tests {
         );
         assert!(load_config(&bad).is_err());
 
-        let empty = write("empty.toml", "api_url = \"https://x.de\"\ncertificates = []\n");
+        let empty = write(
+            "empty.toml",
+            "api_url = \"https://x.de\"\ncertificates = []\n",
+        );
         assert!(load_config(&empty).is_err());
     }
 }
