@@ -47,6 +47,8 @@ jobs:
             name: linux-x86_64
           - target: aarch64-unknown-linux-musl
             name: linux-arm64          # Raspberry Pi 4/5 mit 64-Bit-OS
+          - target: armv7-unknown-linux-musleabihf
+            name: linux-armv7          # Raspberry Pi 4 mit 32-Bit-OS
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

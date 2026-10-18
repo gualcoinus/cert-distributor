@@ -67,8 +67,10 @@ Ein Tag `vX.Y.Z` löst den Release-Workflow aus (Tests + Coverage-Gate, dann Bui
 |---|---|
 | `cert-api-${TAG}-linux-x86_64.tar.gz` | Server-Binary + `cert-api.service` + `add-cert.sh` + Beispiel-Configs |
 | `cert-api-${TAG}-linux-arm64.tar.gz` | dito für aarch64 |
+| `cert-api-${TAG}-linux-armv7.tar.gz` | dito für armv7 (Raspberry Pi 4 mit 32-Bit-OS) |
 | `cert-sync-${TAG}-linux-x86_64.tar.gz` | Client-Binary + Beispiel-Configs + `cert-sync.sh` + Crons |
 | `cert-sync-${TAG}-linux-arm64.tar.gz` | dito für aarch64 |
+| `cert-sync-${TAG}-linux-armv7.tar.gz` | dito für armv7 |
 
 Die Binaries sind statisch gegen musl gelinkt und laufen unabhängig von der glibc-Version des Zielsystems.
 
@@ -85,7 +87,7 @@ cargo test --workspace
 cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 75
 ```
 
-CI (`.github/workflows/ci.yml`) führt Format-Check, Clippy, Tests, Coverage-Gate (>= 75 % Lines), ShellCheck und einen Cross-Build für ARM64 bei jedem Push und Pull Request aus. Die Dateien in `testdata/` sind reine Test-Fixtures (selbstsigniert, ohne Bedeutung). Die Coverage-Schwelle ist als Actions-Variable `COVERAGE_THRESHOLD` konfigurierbar.
+CI (`.github/workflows/ci.yml`) führt Format-Check, Clippy, Tests, Coverage-Gate (>= 75 % Lines), ShellCheck und einen Cross-Build für ARM (aarch64 + armv7) bei jedem Push und Pull Request aus. Die Dateien in `testdata/` sind reine Test-Fixtures (selbstsigniert, ohne Bedeutung). Die Coverage-Schwelle ist als Actions-Variable `COVERAGE_THRESHOLD` konfigurierbar.
 
 ## Sicherheit
 
