@@ -332,6 +332,17 @@ enum Outcome {
     Updated,
 }
 
+#[cfg(test)]
+impl std::fmt::Debug for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UpToDate => f.write_str("UpToDate"),
+            Self::UpdateAvailable => f.write_str("UpdateAvailable"),
+            Self::Updated => f.write_str("Updated"),
+        }
+    }
+}
+
 fn sync_one(cfg: &Config, entry: &CertEntry, http: &Client, cli: &Cli) -> Result<Outcome> {
     let name = entry.name.as_str();
     let dir = entry.target_dir.as_path();
@@ -563,11 +574,131 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    };
+    use std::thread;
 
     const CERT_PEM: &str = include_str!("../../testdata/test-cert.pem");
     const KEY_PEM: &str = include_str!("../../testdata/test-key.pem");
     const OTHER_KEY_PEM: &str = include_str!("../../testdata/other-key.pem");
     const FINGERPRINT: &str = include_str!("../../testdata/fingerprint.txt");
+
+    /// Minimaler HTTP-Mock für cert-sync-Tests: ein TCP-Listener beantwortet
+    /// jeden Request mit der vom `handler` zurückgegebenen Antwort.
+    /// Die Tests setzen voraus, dass `api_url` per `allow_insecure_http = true`
+    /// auf `http://127.0.0.1:PORT` zeigt.
+    struct TestApi {
+        base_url: String,
+        stop: Option<mpsc::Sender<()>>,
+    }
+
+    type Handler = Arc<dyn Fn(&str) -> (u16, Vec<u8>) + Send + Sync>;
+
+    impl TestApi {
+        fn start(handler: Handler) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (tx, rx): (mpsc::Sender<()>, Receiver<()>) = mpsc::channel();
+            thread::spawn(move || {
+                listener.set_nonblocking(false).unwrap();
+                for stream in listener.incoming() {
+                    if rx.try_recv().is_ok() {
+                        return;
+                    }
+                    let Ok(mut stream) = stream else { continue };
+                    let mut buf = [0u8; 8192];
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let (status, body) = handler(path);
+                    let reason = match status {
+                        200 => "OK",
+                        204 => "No Content",
+                        400 => "Bad Request",
+                        401 => "Unauthorized",
+                        404 => "Not Found",
+                        500 => "Internal Server Error",
+                        _ => "Status",
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                }
+            });
+            Self {
+                base_url: format!("http://127.0.0.1:{port}"),
+                stop: Some(tx),
+            }
+        }
+    }
+
+    impl Drop for TestApi {
+        fn drop(&mut self) {
+            if let Some(tx) = self.stop.take() {
+                let _ = tx.send(());
+                // Auf den Listener warten, damit der Thread beendet ist
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    fn make_cfg(target_dir: &Path, base_url: &str) -> Config {
+        Config {
+            api_url: base_url.to_string(),
+            reload_cmd: None,
+            keep_backups: 5,
+            warn_days: 14,
+            splay_secs: 0,
+            lock_file: PathBuf::from("/tmp/cert-sync-test.lock"),
+            key_gid: None,
+            allow_insecure_http: true,
+            certificates: vec![CertEntry {
+                name: "example.com".into(),
+                api_key: "test-key".into(),
+                target_dir: target_dir.to_path_buf(),
+                reload_cmd: None,
+            }],
+        }
+    }
+
+    fn make_cli(force: bool, check_only: bool) -> Cli {
+        Cli {
+            config: PathBuf::from("/tmp/irrelevant.toml"),
+            check_only,
+            force,
+            only: None,
+        }
+    }
+
+    fn make_entry(target_dir: &Path) -> CertEntry {
+        CertEntry {
+            name: "example.com".into(),
+            api_key: "test-key".into(),
+            target_dir: target_dir.to_path_buf(),
+            reload_cmd: None,
+        }
+    }
+
+    fn make_http() -> Client {
+        Client::builder()
+            .timeout(Duration::from_secs(5))
+            .https_only(false)
+            .build()
+            .unwrap()
+    }
 
     #[test]
     fn fingerprint_matches_api_calculation() {
@@ -686,5 +817,263 @@ mod tests {
             "api_url = \"https://x.de\"\ncertificates = []\n",
         );
         assert!(load_config(&empty).is_err());
+    }
+
+    #[test]
+    fn api_new_strips_trailing_slash() {
+        let entry = make_entry(Path::new("/tmp"));
+        let http = make_http();
+        let api = Api::new(&http, "http://x/", &entry).unwrap();
+        assert_eq!(api.base, "http://x");
+        assert_eq!(api.name, "example.com");
+    }
+
+    #[test]
+    fn api_get_returns_4xx_as_error() {
+        // 401 bricht laut Spec sofort ab (kein Retry, kein 5-s-Sleep)
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/check") {
+                (401, Vec::new())
+            } else {
+                (404, Vec::new())
+            }
+        }));
+        let http = make_http();
+        let entry = make_entry(Path::new("/tmp"));
+        let a = Api::new(&http, &api.base_url, &entry).unwrap();
+        let err = a.get("check", &[]).unwrap_err();
+        assert!(format!("{err:#}").contains("401"), "got: {err:#}");
+    }
+
+    #[test]
+    fn sync_one_first_install_no_local_cert() {
+        // Kein lokales Zertifikat → API muss fullchain.pem + privkey.pem liefern.
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/files/fullchain.pem") {
+                (200, CERT_PEM.as_bytes().to_vec())
+            } else if path.contains("/files/privkey.pem") {
+                (200, KEY_PEM.as_bytes().to_vec())
+            } else {
+                (404, Vec::new())
+            }
+        }));
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = make_cfg(tmp.path(), &api.base_url);
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(false, false);
+
+        let outcome = sync_one(&cfg, &entry, &http, &cli).unwrap();
+        assert!(matches!(outcome, Outcome::Updated));
+
+        // Zertifikate wurden geschrieben
+        let cert_path = tmp.path().join("fullchain.pem");
+        let key_path = tmp.path().join("privkey.pem");
+        assert!(cert_path.exists());
+        assert!(key_path.exists());
+        // Modus 0600 für Key (kein key_gid gesetzt)
+        assert_eq!(
+            fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn sync_one_up_to_date_no_force() {
+        // Lokales Zertifikat vorhanden, API sagt: kein Update.
+        let tmp = tempfile::tempdir().unwrap();
+        // fullchain.pem + privkey.pem als "lokales" Material ablegen
+        fs::write(tmp.path().join("fullchain.pem"), CERT_PEM).unwrap();
+        fs::write(tmp.path().join("privkey.pem"), KEY_PEM).unwrap();
+
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/check") {
+                (200, br#"{"update_available":false}"#.to_vec())
+            } else {
+                (500, Vec::new())
+            }
+        }));
+        let cfg = make_cfg(tmp.path(), &api.base_url);
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(false, false);
+
+        let outcome = sync_one(&cfg, &entry, &http, &cli).unwrap();
+        assert!(matches!(outcome, Outcome::UpToDate));
+    }
+
+    #[test]
+    fn sync_one_check_only_reports_update_without_download() {
+        // Erstinstallation + --check-only → UpdateAvailable, kein Download
+        let api = TestApi::start(Arc::new(|_path| (500, Vec::new()))); // alles andere ist Fehler
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = make_cfg(tmp.path(), &api.base_url);
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(false, true);
+
+        let outcome = sync_one(&cfg, &entry, &http, &cli).unwrap();
+        assert!(matches!(outcome, Outcome::UpdateAvailable));
+        assert!(!tmp.path().join("fullchain.pem").exists());
+    }
+
+    #[test]
+    fn sync_one_update_available_writes_files_and_backup() {
+        // Vorhandenes Zertifikat (Key passt dazu) + neues Zertifikat von API
+        // (hier verwenden wir dieselbe Datei, da das ausreicht, um Backup +
+        // Schreibvorgang zu prüfen).
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("fullchain.pem"), CERT_PEM).unwrap();
+        fs::write(tmp.path().join("privkey.pem"), KEY_PEM).unwrap();
+
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/check") {
+                (200, br#"{"update_available":true}"#.to_vec())
+            } else if path.contains("/files/fullchain.pem") {
+                (200, CERT_PEM.as_bytes().to_vec())
+            } else if path.contains("/files/privkey.pem") {
+                (200, KEY_PEM.as_bytes().to_vec())
+            } else {
+                (404, Vec::new())
+            }
+        }));
+        let cfg = make_cfg(tmp.path(), &api.base_url);
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        // --force überspringt den Fingerprint-Gleichheits-Check nach dem Download
+        let cli = make_cli(true, false);
+
+        let outcome = sync_one(&cfg, &entry, &http, &cli).unwrap();
+        assert!(matches!(outcome, Outcome::Updated));
+        // Backup wurde angelegt
+        let backup = tmp.path().join("backup");
+        assert!(backup.is_dir());
+        let subdirs: Vec<_> = fs::read_dir(&backup)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        assert_eq!(subdirs.len(), 1);
+    }
+
+    #[test]
+    fn sync_one_force_skips_check_endpoint() {
+        // Mit --force: /check darf nicht angefragt werden, auch wenn ein
+        // lokales Zertifikat existiert.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("fullchain.pem"), CERT_PEM).unwrap();
+        fs::write(tmp.path().join("privkey.pem"), KEY_PEM).unwrap();
+
+        let hits = Arc::new(Mutex::new(Vec::<String>::new()));
+        let hits_c = Arc::clone(&hits);
+        let api = TestApi::start(Arc::new(move |path| {
+            hits_c.lock().unwrap().push(path.to_string());
+            if path.contains("/files/fullchain.pem") {
+                (200, CERT_PEM.as_bytes().to_vec())
+            } else if path.contains("/files/privkey.pem") {
+                (200, KEY_PEM.as_bytes().to_vec())
+            } else {
+                (500, Vec::new())
+            }
+        }));
+        let cfg = make_cfg(tmp.path(), &api.base_url);
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(true, false);
+
+        let _ = sync_one(&cfg, &entry, &http, &cli).unwrap();
+        let seen = hits.lock().unwrap();
+        assert!(
+            !seen.iter().any(|p| p.contains("/check")),
+            "force darf /check nicht anfragen"
+        );
+        assert!(seen.iter().any(|p| p.contains("/files/fullchain.pem")));
+    }
+
+    #[test]
+    fn sync_one_key_gid_sets_640_and_chowns() {
+        // key_gid gesetzt → Modus 0640, chown wird aufgerufen
+        // (chown schlägt mit ungültiger GID fehl → Test prüft den Fehlerpfad).
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/files/fullchain.pem") {
+                (200, CERT_PEM.as_bytes().to_vec())
+            } else if path.contains("/files/privkey.pem") {
+                (200, KEY_PEM.as_bytes().to_vec())
+            } else {
+                (404, Vec::new())
+            }
+        }));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = make_cfg(tmp.path(), &api.base_url);
+        // Eine GID, die auf dem Testsystem mit Sicherheit nicht existiert,
+        // damit chown garantiert fehlschlägt.
+        cfg.key_gid = Some(99_999_999);
+
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(false, false);
+
+        let err = sync_one(&cfg, &entry, &http, &cli).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("chown"),
+            "erwarteter chown-Fehler, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn sync_one_local_cert_unreadable_proceeds_as_if_none() {
+        // fullchain.pem existiert, ist aber kein gültiges PEM → Warnung,
+        // Verhalten wie Erstinstallation (UpdateAvailable wird geholt).
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("fullchain.pem"), b"kein gueltiges PEM").unwrap();
+
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/files/fullchain.pem") {
+                (200, CERT_PEM.as_bytes().to_vec())
+            } else if path.contains("/files/privkey.pem") {
+                (200, KEY_PEM.as_bytes().to_vec())
+            } else if path.contains("/check") {
+                (500, Vec::new()) // darf nicht angefragt werden
+            } else {
+                (404, Vec::new())
+            }
+        }));
+        let cfg = make_cfg(tmp.path(), &api.base_url);
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(false, false);
+
+        let outcome = sync_one(&cfg, &entry, &http, &cli).unwrap();
+        assert!(matches!(outcome, Outcome::Updated));
+    }
+
+    #[test]
+    fn sync_one_reload_failure_triggers_rollback() {
+        // Vorhandenes Zertifikat, neue Version lädt, Reload schlägt fehl →
+        // Backup wird wiederhergestellt und der Fehler propagiert.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("fullchain.pem"), CERT_PEM).unwrap();
+        fs::write(tmp.path().join("privkey.pem"), KEY_PEM).unwrap();
+
+        let api = TestApi::start(Arc::new(|path| {
+            if path.contains("/check") {
+                (200, br#"{"update_available":true}"#.to_vec())
+            } else if path.contains("/files/fullchain.pem") {
+                (200, CERT_PEM.as_bytes().to_vec())
+            } else if path.contains("/files/privkey.pem") {
+                (200, KEY_PEM.as_bytes().to_vec())
+            } else {
+                (404, Vec::new())
+            }
+        }));
+        let mut cfg = make_cfg(tmp.path(), &api.base_url);
+        cfg.reload_cmd = Some("false".into()); // schlägt fehl
+        let entry = make_entry(tmp.path());
+        let http = make_http();
+        let cli = make_cli(true, false); // --force: Fingerprint-Gleichheits-Check überspringen
+
+        let err = sync_one(&cfg, &entry, &http, &cli).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Reload-Befehl"), "got: {msg}");
     }
 }

@@ -11,16 +11,29 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  COVERAGE_THRESHOLD: 75          # default; überschreibbar via Repo-Actions-Variable
 
 jobs:
   test:
-    name: Tests
+    name: Tests + Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: llvm-cov
       - run: cargo test --workspace
+      - name: Coverage (lines >= ${{ env.COVERAGE_THRESHOLD }} %)
+        run: |
+          cargo llvm-cov \
+            --workspace \
+            --all-features \
+            --summary-only \
+            --fail-under-lines "$COVERAGE_THRESHOLD"
+        env:
+          COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || env.COVERAGE_THRESHOLD }}
 
   build:
     name: Build ${{ matrix.name }}
@@ -34,8 +47,6 @@ jobs:
             name: linux-x86_64
           - target: aarch64-unknown-linux-musl
             name: linux-arm64          # Raspberry Pi 4/5 mit 64-Bit-OS
-          - target: armv7-unknown-linux-musleabihf
-            name: linux-armv7          # Raspberry Pi 4 mit 32-Bit-OS
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -46,20 +57,41 @@ jobs:
         with:
           tool: cross
 
-      - name: Build (statisch gelinkt, musl)
-        run: cross build --release --workspace --target ${{ matrix.target }}
+      - name: Build cert-api (statisch gelinkt, musl)
+        run: cross build --release -p cert-api --target ${{ matrix.target }}
 
-      - name: Paket schnüren
+      - name: Build cert-sync (statisch gelinkt, musl)
+        run: cross build --release -p cert-sync --target ${{ matrix.target }}
+
+      - name: Server-Tarball schnüren
         run: |
           set -euo pipefail
-          DIR="cert-distributor-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          DIR="cert-api-${GITHUB_REF_NAME}-${{ matrix.name }}"
           BIN="target/${{ matrix.target }}/release"
           mkdir -p "dist/$DIR/examples"
-          cp "$BIN/cert-api" "$BIN/cert-sync" "dist/$DIR/"
+          cp "$BIN/cert-api" "dist/$DIR/"
           cp cert-api/config.example.toml cert-api/nginx.conf.example \
-             cert-sync/cert-sync.example.toml cert-sync/cert-sync.cron.example \
              "dist/$DIR/examples/"
-          cp -r scripts deploy README.md "dist/$DIR/"
+          cp deploy/cert-api.service scripts/add-cert.sh README.md \
+             "dist/$DIR/"
+          tar -C dist -czf "dist/$DIR.tar.gz" "$DIR"
+          (cd dist && sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256")
+
+      - name: Client-Tarball schnüren
+        run: |
+          set -euo pipefail
+          DIR="cert-sync-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          BIN="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$DIR/examples"
+          cp "$BIN/cert-sync" "dist/$DIR/"
+          cp cert-sync/cert-sync.example.toml \
+             "dist/$DIR/examples/"
+          cp cert-sync/cert-sync.cron.example \
+             scripts/cert-sync.sh \
+             scripts/cert-sync.conf.example \
+             scripts/cert-sync.cron.example \
+             README.md \
+             "dist/$DIR/"
           tar -C dist -czf "dist/$DIR.tar.gz" "$DIR"
           (cd dist && sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256")
 
