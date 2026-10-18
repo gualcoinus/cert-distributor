@@ -61,13 +61,16 @@ Optionen: `--check-only`, `--force`, `--only <name>`, `-c <config>`. Exit-Codes:
 
 ## Releases
 
-Ein Tag `vX.Y.Z` löst den Release-Workflow aus (erst Tests, dann Build, dann GitHub Release mit Prüfsummen):
+Ein Tag `vX.Y.Z` löst den Release-Workflow aus (Tests + Coverage-Gate, dann Build, dann GitHub Release mit Prüfsummen). Pro Tag und Zielarchitektur entstehen zwei Tarballs:
 
-| Datei | Zielsystem |
+| Datei | Inhalt |
 |---|---|
-| `…-linux-x86_64.tar.gz` | x86-64 |
-| `…-linux-arm64.tar.gz` | ARM 64 Bit (Raspberry Pi 4/5 mit 64-Bit-OS) |
-| `…-linux-armv7.tar.gz` | ARM 32 Bit (Raspberry Pi 4 mit 32-Bit-OS) |
+| `cert-api-${TAG}-linux-x86_64.tar.gz` | Server-Binary + `cert-api.service` + `add-cert.sh` + Beispiel-Configs |
+| `cert-api-${TAG}-linux-arm64.tar.gz` | dito für aarch64 |
+| `cert-api-${TAG}-linux-armv7.tar.gz` | dito für armv7 (Raspberry Pi 4 mit 32-Bit-OS) |
+| `cert-sync-${TAG}-linux-x86_64.tar.gz` | Client-Binary + Beispiel-Configs + `cert-sync.sh` + Crons |
+| `cert-sync-${TAG}-linux-arm64.tar.gz` | dito für aarch64 |
+| `cert-sync-${TAG}-linux-armv7.tar.gz` | dito für armv7 |
 
 Die Binaries sind statisch gegen musl gelinkt und laufen unabhängig von der glibc-Version des Zielsystems.
 
@@ -81,9 +84,10 @@ git tag v0.1.0 && git push origin v0.1.0
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 75
 ```
 
-CI (`.github/workflows/ci.yml`) führt Format-Check, Clippy, Tests, ShellCheck und einen Cross-Build für ARM bei jedem Push und Pull Request aus. Die Dateien in `testdata/` sind reine Test-Fixtures (selbstsigniert, ohne Bedeutung).
+CI (`.github/workflows/ci.yml`) führt Format-Check, Clippy, Tests, Coverage-Gate (>= 75 % Lines), ShellCheck und einen Cross-Build für ARM (aarch64 + armv7) bei jedem Push und Pull Request aus. Die Dateien in `testdata/` sind reine Test-Fixtures (selbstsigniert, ohne Bedeutung). Die Coverage-Schwelle ist als Actions-Variable `COVERAGE_THRESHOLD` konfigurierbar.
 
 ## Sicherheit
 

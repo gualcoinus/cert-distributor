@@ -10,10 +10,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  COVERAGE_THRESHOLD: 75          # default; überschreibbar via Repo-Actions-Variable
 
 jobs:
   test:
-    name: Format, Clippy, Tests
+    name: Format, Clippy, Tests, Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,12 +22,24 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+      - name: Coverage (lines >= ${{ env.COVERAGE_THRESHOLD }} %)
+        run: |
+          cargo llvm-cov \
+            --workspace \
+            --all-features \
+            --summary-only \
+            --fail-under-lines "$COVERAGE_THRESHOLD"
+        env:
+          COVERAGE_THRESHOLD: ${{ vars.COVERAGE_THRESHOLD || env.COVERAGE_THRESHOLD }}
 
   shellcheck:
     name: ShellCheck
