@@ -45,6 +45,13 @@ jobs:
     env:
       REPO: gualcoinus/cert-distributor
     steps:
+      - name: Benötigte Tools installieren
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y -qq --no-install-recommends \
+              bash curl tar openssl ca-certificates sudo passwd
+
       - name: Quellen ermitteln (Tag → main, Branch-Push/PR → eigener Branch, manuell → inputs)
         id: pick
         run: |
@@ -89,13 +96,6 @@ jobs:
           echo "ref=$REF"        >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "event=$EVENT"    >> "$GITHUB_OUTPUT"
-
-      - name: Benötigte Tools installieren
-        run: |
-          apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive \
-            apt-get install -y -qq --no-install-recommends \
-              bash curl tar openssl ca-certificates sudo passwd
 
       - name: Dummy-Let's-Encrypt-Struktur anlegen
         run: |
@@ -172,6 +172,13 @@ jobs:
     env:
       REPO: gualcoinus/cert-distributor
     steps:
+      - name: Benötigte Tools installieren
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y -qq --no-install-recommends \
+              bash curl tar openssl ca-certificates sudo passwd
+
       - name: Quellen ermitteln
         id: pick
         run: |
@@ -213,13 +220,6 @@ jobs:
 
           echo "ref=$REF"        >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Benötigte Tools installieren
-        run: |
-          apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive \
-            apt-get install -y -qq --no-install-recommends \
-              bash curl tar openssl ca-certificates sudo passwd
 
       - name: Auf Release warten (max. 3 min)
         run: |
