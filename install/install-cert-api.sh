@@ -175,36 +175,60 @@ EOF
 fi
 
 # --- systemd ------------------------------------------------------------------
-if (( DO_SYSTEMD )) && command -v systemctl >/dev/null; then
-  install -m 0644 "$PKG_DIR/deploy/cert-api.service" /etc/systemd/system/cert-api.service
-  # systemd-Drop-in für konfigurierbare Pfade
-  install -d -m 0755 /etc/systemd/system/cert-api.service.d
-  cat >/etc/systemd/system/cert-api.service.d/override.conf <<EOF
+# cert-api.service: in v0.0.1 an der Tarball-Wurzel, in aelteren Releases
+# unter deploy/. Erst neu, dann alt versuchen, damit beide Layouts greifen.
+SERVICE_SRC=""
+for cand in "$PKG_DIR/cert-api.service" "$PKG_DIR/deploy/cert-api.service" "$PKG_DIR/scripts/cert-api.service"; do
+  [[ -f $cand ]] && { SERVICE_SRC="$cand"; break; }
+done
+if (( DO_SYSTEMD )); then
+  if [[ -n $SERVICE_SRC ]]; then
+    install -m 0644 "$SERVICE_SRC" /etc/systemd/system/cert-api.service
+    # systemd-Drop-in für konfigurierbare Pfade
+    install -d -m 0755 /etc/systemd/system/cert-api.service.d
+    cat >/etc/systemd/system/cert-api.service.d/override.conf <<EOF
 [Service]
 Environment=CERT_API_LIVE_BASE=$LIVE_BASE
 Environment=CERT_API_ARCHIVE_BASE=$ARCHIVE_BASE
 EOF
-  systemctl daemon-reload
-  systemctl enable --now cert-api
-  echo "systemd-Dienst 'cert-api' gestartet."
-  systemctl --no-pager status cert-api || true
+    if command -v systemctl >/dev/null; then
+      systemctl daemon-reload
+      systemctl enable --now cert-api
+      echo "systemd-Dienst 'cert-api' gestartet."
+      systemctl --no-pager status cert-api || true
+    else
+      echo "systemd-Unit abgelegt: /etc/systemd/system/cert-api.service (kein systemctl – manuell enablen)."
+    fi
+  else
+    echo "Kein cert-api.service im Paket gefunden – systemd-Unit ausgelassen." >&2
+  fi
 else
-  echo "systemd nicht installiert/gewünscht – manuell starten: $BIN_DIR/cert-api $CONFIG"
+  echo "systemd nicht gewünscht – manuell starten: $BIN_DIR/cert-api $CONFIG"
 fi
 
 # --- nginx-Snippet ablegen ---------------------------------------------------
 if (( DO_NGINX )); then
   install -d -m 0755 /etc/cert-api/nginx
-  if [[ -f $PKG_DIR/cert-api/nginx.conf.example ]]; then
-    install -m 0644 "$PKG_DIR/cert-api/nginx.conf.example" /etc/cert-api/nginx/cert-api.conf
+  NGINX_SRC=""
+  for cand in "$PKG_DIR/examples/nginx.conf.example" \
+              "$PKG_DIR/cert-api/nginx.conf.example" \
+              "$PKG_DIR/nginx.conf.example"; do
+    [[ -f $cand ]] && { NGINX_SRC="$cand"; break; }
+  done
+  if [[ -n $NGINX_SRC ]]; then
+    install -m 0644 "$NGINX_SRC" /etc/cert-api/nginx/cert-api.conf
     echo "nginx-Vorlage: /etc/cert-api/nginx/cert-api.conf (in eigenen server-Block übernehmen)"
   fi
 fi
 
 # add-cert.sh für die Folge-Inserts an die übliche Stelle legen
-if [[ -f $PKG_DIR/scripts/add-cert.sh ]]; then
+ADD_CERT_SRC=""
+for cand in "$PKG_DIR/add-cert.sh" "$PKG_DIR/scripts/add-cert.sh"; do
+  [[ -f $cand ]] && { ADD_CERT_SRC="$cand"; break; }
+done
+if [[ -n $ADD_CERT_SRC ]]; then
   install -d -m 0755 /usr/local/share/cert-api
-  install -m 0755 "$PKG_DIR/scripts/add-cert.sh" /usr/local/share/cert-api/add-cert.sh
+  install -m 0755 "$ADD_CERT_SRC" /usr/local/share/cert-api/add-cert.sh
 fi
 
 cat <<EOF
