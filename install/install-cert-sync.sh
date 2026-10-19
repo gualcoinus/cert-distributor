@@ -106,7 +106,17 @@ install -m 0755 "$PKG_DIR/cert-sync" "$BIN_DIR/$BIN_NAME"
 # alternativer Bash-Client aus dem selben Paket
 [[ -f $PKG_DIR/scripts/cert-sync.sh ]] && install -m 0755 "$PKG_DIR/scripts/cert-sync.sh" "$BIN_DIR/cert-sync.sh" || true
 # Cron-Beispiel aus dem Paket daneben ablegen
-[[ -f $PKG_DIR/scripts/cert-sync.cron.example ]] && install -m 0644 "$PKG_DIR/scripts/cert-sync.cron.example" /etc/cert-sync/cert-sync.cron.example || true
+# Cron-Beispiele aus dem Paket ablegen. Im neuen Split-Tarball liegen beide
+# Varianten unter unterschiedlichen Namen: cert-sync.cron.example (Rust)
+# und cert-sync.sh.cron.example (Bash-Alternative).
+if [[ -f $PKG_DIR/cert-sync.cron.example ]]; then
+  install -m 0644 "$PKG_DIR/cert-sync.cron.example" /etc/cert-sync/cert-sync.cron.example
+elif [[ -f $PKG_DIR/scripts/cert-sync.cron.example ]]; then
+  install -m 0644 "$PKG_DIR/scripts/cert-sync.cron.example" /etc/cert-sync/cert-sync.cron.example
+fi
+if [[ -f $PKG_DIR/cert-sync.sh.cron.example ]]; then
+  install -m 0644 "$PKG_DIR/cert-sync.sh.cron.example" /etc/cert-sync/cert-sync.sh.cron.example
+fi
 
 # Config-Verzeichnis mit restriktiven Rechten
 install -d -m 0700 -o root -g root "$CONF_DIR"
