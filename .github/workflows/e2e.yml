@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# Container-Default-Shell ist /bin/sh (=dash auf debian-slim); bash-spezifische
+# Syntax ([[ ]], Arrays) braucht explizites bash.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
@@ -74,7 +80,7 @@ jobs:
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive \
             apt-get install -y -qq --no-install-recommends \
-              curl tar openssl ca-certificates sudo passwd
+              bash curl tar openssl ca-certificates sudo passwd
 
       - name: Dummy-Let's-Encrypt-Struktur anlegen
         run: |
@@ -97,6 +103,8 @@ jobs:
           done
           echo "Release $VERSION wurde nicht veröffentlicht"
           exit 1
+        env:
+          VERSION: ${{ steps.pick.outputs.version }}
 
       - name: Installer ausführen (genau der README-Einzeiler)
         run: |
@@ -106,6 +114,7 @@ jobs:
         env:
           REF: ${{ steps.pick.outputs.ref }}
           VERSION: ${{ steps.pick.outputs.version }}
+
 
       - name: "Asserts: Binary, User, Gruppe, Verzeichnisse"
         run: |
@@ -182,7 +191,7 @@ jobs:
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive \
             apt-get install -y -qq --no-install-recommends \
-              curl tar openssl ca-certificates sudo passwd
+              bash curl tar openssl ca-certificates sudo passwd
 
       - name: Auf Release warten (max. 3 min)
         run: |
@@ -191,9 +200,12 @@ jobs:
             code=$(curl -s -o /dev/null -w '%{http_code}' \
               "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")
             [[ $code == 200 ]] && { echo "Release $VERSION sichtbar"; exit 0; }
+            echo "  HTTP $code – warte 5s"
             sleep 5
           done
           echo "Release $VERSION wurde nicht veröffentlicht"; exit 1
+        env:
+          VERSION: ${{ steps.pick.outputs.version }}
 
       - name: Installer ausführen (genau der README-Einzeiler)
         run: |
@@ -205,6 +217,7 @@ jobs:
         env:
           REF: ${{ steps.pick.outputs.ref }}
           VERSION: ${{ steps.pick.outputs.version }}
+
 
       - name: "Asserts: Binary und Verzeichnisse"
         run: |
