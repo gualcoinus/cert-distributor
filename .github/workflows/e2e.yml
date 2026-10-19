@@ -7,7 +7,10 @@ name: e2e-installers
 #
 on:
   push:
+    branches: [main, ci/split-releases-coverage]
     tags: ["v*"]
+  pull_request:
+    branches: [main, ci/split-releases-coverage]
   workflow_dispatch:
     inputs:
       ref:
@@ -15,7 +18,7 @@ on:
         required: false
         default: main
       version:
-        description: "Zu testende Release-Version (Default: bei push automatisch = Tag)"
+        description: "Zu testende Release-Version (Default: latest)"
         required: false
         default: ""
 
@@ -36,19 +39,35 @@ jobs:
     env:
       REPO: gualcoinus/cert-distributor
     steps:
-      - name: Quellen ermitteln (Tag → main, sonst Eingabe)
+      - name: Quellen ermitteln (Tag → main, Branch-Push/PR → eigener Branch, manuell → inputs)
         id: pick
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            REF="${{ inputs.ref }}"
-            VERSION="${{ inputs.version }}"
-            [[ -z $VERSION ]] && VERSION=latest
-          else
-            REF="main"
-            VERSION="${GITHUB_REF_NAME#refs/tags/}"
-          fi
-          echo "ref=$REF"     >> "$GITHUB_OUTPUT"
+          EVENT="${{ github.event_name }}"
+          case "$EVENT" in
+            push)
+              if [[ "${{ github.ref_type }}" == tag ]]; then
+                REF="main"                       # gemergter Code steht auf main
+                VERSION="${GITHUB_REF_NAME#refs/tags/}"
+              else
+                REF="${{ github.ref_name }}"     # Branch-Push: Installer-Skripte direkt vom Branch
+                VERSION="latest"                 # Tarball vom aktuell veroeffentlichten Release
+              fi
+              ;;
+            pull_request)
+              REF="${{ github.head_ref }}"       # PR-Quelle: dort liegen die Skripte
+              VERSION="latest"
+              ;;
+            workflow_dispatch)
+              REF="${{ inputs.ref }}"
+              VERSION="${{ inputs.version }}"
+              [[ -z $VERSION ]] && VERSION="latest"
+              ;;
+            *)
+              echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
+          esac
+          echo "ref=$REF"        >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT"    >> "$GITHUB_OUTPUT"
 
       - name: Benötigte Tools installieren
         run: |
@@ -132,14 +151,29 @@ jobs:
       - name: Quellen ermitteln
         id: pick
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            REF="${{ inputs.ref }}"
-            VERSION="${{ inputs.version }}"
-            [[ -z $VERSION ]] && VERSION=latest
-          else
-            REF="main"
-            VERSION="${GITHUB_REF_NAME#refs/tags/}"
-          fi
+          EVENT="${{ github.event_name }}"
+          case "$EVENT" in
+            push)
+              if [[ "${{ github.ref_type }}" == tag ]]; then
+                REF="main"
+                VERSION="${GITHUB_REF_NAME#refs/tags/}"
+              else
+                REF="${{ github.ref_name }}"
+                VERSION="latest"
+              fi
+              ;;
+            pull_request)
+              REF="${{ github.head_ref }}"
+              VERSION="latest"
+              ;;
+            workflow_dispatch)
+              REF="${{ inputs.ref }}"
+              VERSION="${{ inputs.version }}"
+              [[ -z $VERSION ]] && VERSION="latest"
+              ;;
+            *)
+              echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
+          esac
           echo "ref=$REF"        >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
