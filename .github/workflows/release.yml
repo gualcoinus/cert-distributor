@@ -88,12 +88,16 @@ jobs:
           cp "$BIN/cert-sync" "dist/$DIR/"
           cp cert-sync/cert-sync.example.toml \
              "dist/$DIR/examples/"
+          # cert-sync.cron.example (Rust) und scripts/cert-sync.cron.example (Bash)
+          # haben denselben Basename → bash-Kopie mit eigenem Namen ablegen,
+          # sonst weigert sich `cp`, die gerade erzeugte Datei zu überschreiben.
           cp cert-sync/cert-sync.cron.example \
              scripts/cert-sync.sh \
              scripts/cert-sync.conf.example \
-             scripts/cert-sync.cron.example \
              README.md \
              "dist/$DIR/"
+          install -m 0644 scripts/cert-sync.cron.example \
+             "dist/$DIR/cert-sync.sh.cron.example"
           tar -C dist -czf "dist/$DIR.tar.gz" "$DIR"
           (cd dist && sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256")
 
