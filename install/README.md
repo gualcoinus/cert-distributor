@@ -43,24 +43,31 @@ curl -fsSL https://raw.githubusercontent.com/gualcoinus/cert-distributor/main/sc
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gualcoinus/cert-distributor/main/install/install-cert-sync.sh \
-  | sudo bash
+  | sudo bash -s -- \
+      --domain  hermes.dyit.de \
+      --api-host certs.dyit.de
 ```
 
-Was passiert:
+Der Installer braucht **nur zwei Angaben**: die eigene Domain (für die das
+Zertifikat bestimmt ist) und den Hostnamen des `cert-api`-Servers. Daraus
+baut er automatisch:
 
-1. Release-Asset laden, SHA-256 prüfen, Binary nach `/usr/local/bin/cert-sync`
-2. `/etc/cert-sync` (`700`) und `/etc/cert-sync/cert-sync.toml` (`600`,
-   Platzhalter) anlegen
-3. `/etc/cron.d/cert-sync` mit Default-Zeit `03:17` und Log nach
+1. `api_url = "https://${api-host}"`
+2. `target_dir = "/etc/ssl/${domain}"`
+3. einen frischen 64-Zeichen-Hex-`api_key` – den gibst du dem
+   `cert-api`-Admin, damit er die Domain damit registriert
+4. einen passenden `[[certificates]]`-Block in `cert-sync.toml`
+5. (falls nginx installiert ist) ein vorkonfiguriertes
+   `/etc/nginx/conf.d/${domain}.conf` mit SSL-Pfaden und einer
+   `proxy_pass`-Zeile als Platzhalter – **diese musst du noch anpassen**
+   (s. u.)
+6. `/etc/cron.d/cert-sync` mit Default-Zeit `03:17` und Log nach
    `/var/log/cert-sync.log`
 
-Danach in der TOML `api_url` und pro Zertifikat `name`, `api_key`,
-`target_dir`, ggf. `reload_cmd` eintragen und Probelauf:
-
-```bash
-sudo -e /etc/cert-sync/cert-sync.toml   # oder Lieblingseditor
-sudo cert-sync --check-only              # muss exit 0 oder 1 liefern, kein 2
-```
+`api_key` und `reload_cmd` werden **nicht** als Parameter abgefragt: der
+Installer generiert beides selbst. Pro Host reicht ein Eintrag – soll der
+selbe Host ein zweites Zertifikat ziehen, `[[certificates]]`-Block in
+`cert-sync.toml` manuell ergänzen.
 
 ## Optionen
 
@@ -68,11 +75,11 @@ Beide Skripte akzeptieren Argumente nach `bash -s --`, z. B.:
 
 ```bash
 curl -fsSL …/install-cert-api.sh | sudo bash -s -- --version v0.2.0 --no-nginx
-curl -fsSL …/install-cert-sync.sh | sudo bash -s -- --cron-time "47 4 * * *"
+curl -fsSL …/install-cert-sync.sh | sudo bash -s -- --no-nginx --cron-time "47 4 * * *"
 ```
 
 `--help` listet jeweils alle Optionen. Mit `--uninstall` wird wieder alles
-entfernt, was das Skript angelegt hat.
+entfernt, was das Skript angelegt hat (inkl. zugehöriger nginx-Snippets).
 
 ## Beispiel: `hermes.dyit.de` von Anfang bis Ende
 
@@ -86,40 +93,44 @@ sudo /usr/local/share/cert-api/add-cert.sh -c /etc/cert-api/config.toml hermes.d
 #   API-Key:  <64-Zeichen-Hex>           ← notieren / sicher ablegen!
 ```
 
-**2. Client-Seite** (auf jedem Host, der das Zertifikat braucht). Den notierten
-API-Key einsetzen, in Hochkomma – Sonderzeichen behält die Shell so sicher:
+**2. Client-Seite** (auf jedem Host, der das Zertifikat braucht). Den
+notierten API-Key als `api_key` auf der Server-Seite registrieren – den hier
+vom Client-Installer erzeugten Key dem Server-Admin geben (Reverse-Richtung):
 
 ```bash
-API_KEY="<hier_den_von_add-cert.sh_ausgegebenen_key_einsetzen>"
 curl -fsSL https://raw.githubusercontent.com/gualcoinus/cert-distributor/main/install/install-cert-sync.sh \
   | sudo bash -s -- \
-      --api-url https://certs.dyit.de \
-      --cert    "hermes.dyit.de:${API_KEY}:/etc/ssl/hermes.dyit.de:nginx -t && systemctl reload nginx"
-sudo cert-sync --check-only              # exit 0 oder 1 → ok, exit 2 → Config prüfen
+      --domain   hermes.dyit.de \
+      --api-host certs.dyit.de
+#  → Konfiguration generiert: /etc/cert-sync/cert-sync.toml
+#  → API-Key (dem cert-distributor-Admin geben, damit er 'hermes.dyit.de' damit registriert):
+#     8e45ac82a31b9c8e578bd402fa09d4c94416d37ef2ac09c9202efac951d7de9c
+
+sudo cert-sync --check-only    # exit 0 oder 1 → ok, exit 2 → Config prüfen
 ```
 
-Was dadurch automatisch passiert: `cert-sync.toml` wird mit `api_url` und
-genau einem `[[certificates]]`-Block für `hermes.dyit.de` (inkl.
-`reload_cmd`) angelegt, der Cronjob steht ab morgen 03:17 in
-`/etc/cron.d/cert-sync`, Log unter `/var/log/cert-sync.log`.
-
-**3. Reverse-Proxy** – das war's noch nicht, der Client zeigt via HTTPS auf
-die nginx-Frontseite des Servers. Diese Config-Schnipsel sind unabhängig; in
-den `server { … }`-Block für `certs.dyit.de` gehört ein
+**3. Reverse-Proxy / Backend** – der Installer legt bei installiertem nginx
+eine Datei `/etc/nginx/conf.d/hermes.dyit.de.conf` mit SSL-Block und einem
+Platzhalter an. Den musst du noch auf dein eigentliches Backend zeigen
+lassen:
 
 ```nginx
-location / {
-    limit_req zone=certapi burst=20 nodelay;
-    proxy_pass http://127.0.0.1:8443;
-    proxy_set_header Host              $host;
-    proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
+server {
+    listen 443 ssl;
+    server_name hermes.dyit.de;
+
+    ssl_certificate     /etc/ssl/hermes.dyit.de/fullchain.pem;
+    ssl_certificate_key /etc/ssl/hermes.dyit.de/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;   # <-- anpassen
+    }
 }
 ```
 
-(Vorlage liegt nach der Server-Installation bereits unter
-`/etc/cert-api/nginx/cert-api.conf`.)
+`proxy_pass http://127.0.0.1:8080;` zeigt standardmäßig auf Port 8080 –
+ersetzen durch deinen App-Server (oder `unix:/var/run/app.sock`, anderer
+Port etc.), dann `nginx -t && systemctl reload nginx`.
 
 ## Release-Schema
 

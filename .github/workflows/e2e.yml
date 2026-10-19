@@ -295,8 +295,9 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-sync.sh" \
             | sudo bash -s -- \
                 --version "$VERSION" \
-                --api-url "https://certs.test.example" \
-                --cert    "example.com:KEY1234:/etc/ssl/example.com:nginx -t"
+                --domain  "example.com" \
+                --api-host "certs.test.example" \
+                --no-nginx
         env:
           REF: ${{ steps.pick.outputs.ref }}
           VERSION: ${{ steps.pick.outputs.version }}
@@ -328,17 +329,28 @@ jobs:
           # Logfile existiert (vom Installer touch'ed, schreibbar fuer root)
           test -f /var/log/cert-sync.log
 
-      - name: "Asserts: cert-sync.toml-Inhalt"
+      - name: "Asserts: cert-sync.toml-Inhalt (neues --domain/--api-host-Schema)"
         run: |
           set -eu
           F=/etc/cert-sync/cert-sync.toml
+          # api_url aus --api-host abgeleitet
           grep -Fxq 'api_url    = "https://certs.test.example"' "$F"
+          # name aus --domain
           grep -Fxq 'name       = "example.com"'                "$F"
-          grep -Fxq 'api_key    = "KEY1234"'                    "$F"
+          # target_dir als Default /etc/ssl/${domain}
           grep -Fxq 'target_dir = "/etc/ssl/example.com"'       "$F"
-          grep -Fxq 'reload_cmd = "nginx -t"'                   "$F"
-          # Default-reload_cmd auf Top-Level (Fallback, falls keine cert-spezifische)
-          grep -q '^reload_cmd = "nginx -t && systemctl reload nginx"' "$F"
+          # api_key automatisch generiert: 64 hex-Zeichen
+          key=$(awk -F'"' '/^api_key[[:space:]]*=/{print $2; exit}' "$F")
+          [[ ${#key} -eq 64 ]] || { echo "FAIL api_key length: ${#key}"; exit 1; }
+          [[ $key =~ ^[0-9a-f]{64}$ ]] || { echo "FAIL api_key not hex: $key"; exit 1; }
+          echo "OK  api_key: 64 hex (${key:0:8}…${key: -8})"
+          # Top-Level reload_cmd = default
+          grep -Fxq 'reload_cmd = "nginx -t && systemctl reload nginx"' "$F"
+          # Kein per-cert reload_cmd im [[certificates]]-Block
+          awk '/^\[\[certificates\]\]/{p=1; next} p && /^\[/ {p=0} p' "$F" \
+            | grep -q '^reload_cmd' && { echo "FAIL per-cert reload_cmd vorhanden"; exit 1; } || echo "OK  kein per-cert reload_cmd"
+          # --no-nginx: kein Snippet angelegt
+          test ! -f /etc/nginx/conf.d/example.com.conf
 
       - name: "Asserts: Idempotenz (zweiter Lauf ueberschreibt cert-sync.toml nicht)"
         run: |
@@ -346,8 +358,9 @@ jobs:
           before=$(sha256sum /etc/cert-sync/cert-sync.toml | awk '{print $1}')
           curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-sync.sh" \
             | sudo bash -s -- --version "$VERSION" \
-                --api-url "https://certs.test.example" \
-                --cert    "example.com:KEY1234:/etc/ssl/example.com:nginx -t"
+                --domain  "example.com" \
+                --api-host "certs.test.example" \
+                --no-nginx
           after=$(sha256sum /etc/cert-sync/cert-sync.toml | awk '{print $1}')
           [[ "$before" == "$after" ]] || { echo "FAIL: cert-sync.toml wurde ueberschrieben"; exit 1; }
           echo "OK  Idempotenz: cert-sync.toml unveraendert nach zweitem Lauf"
@@ -355,7 +368,16 @@ jobs:
           REF: ${{ steps.pick.outputs.ref }}
           VERSION: ${{ steps.pick.outputs.version }}
 
-      - name: Cleanup (Cron-Eintrag wieder entfernen)
+      - name: Cleanup (Cron-Eintrag und ggf. nginx-Snippet wieder entfernen)
         if: always()
         run: |
           sudo rm -f /etc/cron.d/cert-sync || true
+          # Im e2e wird --no-nginx genutzt, also nichts zu tun. Falls doch mal
+          # ein Snippet entstanden ist (manueller Test), wird es hier markergestuetzt entfernt.
+          if [[ -d /etc/nginx/conf.d ]]; then
+            for f in /etc/nginx/conf.d/*.conf; do
+              [[ -f $f ]] || continue
+              head -1 "$f" 2>/dev/null | grep -q '^# Generiert von install-cert-sync.sh' \
+                && sudo rm -f "$f"
+            done
+          fi

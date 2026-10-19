@@ -24,7 +24,7 @@ ARCHIVE_BASE="/etc/letsencrypt/archive"
 USE_ARCHIVE=1
 SERVICE=""
 
-while getopts ":c:l:a:nr:h" opt; do
+while getopts ":c:l:a:n:r:h" opt; do
   case "$opt" in
     c) CONFIG=$OPTARG ;;
     l) LIVE_BASE=$OPTARG ;;
