@@ -71,6 +71,21 @@ jobs:
             *)
               echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
           esac
+
+          # "latest" zur echten Tag-Version auflösen – Installer akzeptieren
+          # nur konkrete Tags (latest literal ergibt asset=cert-...-latest-...
+          # und 404). Die GitHub-API gibt den passenden Tag als tag_name.
+          if [[ $VERSION == latest ]]; then
+            actual=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+                     | awk -F'"' '/"tag_name":/{print $4; exit}')
+            if [[ -z $actual ]]; then
+              echo "FEHLER: kein Release auf ${REPO} veröffentlicht – zuerst taggen." >&2
+              exit 1
+            fi
+            echo "  latest → $actual"
+            VERSION="$actual"
+          fi
+
           echo "ref=$REF"        >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "event=$EVENT"    >> "$GITHUB_OUTPUT"
@@ -183,6 +198,19 @@ jobs:
             *)
               echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
           esac
+
+          # "latest" → konkreten Tag auflösen (Installer verstehen kein "latest")
+          if [[ $VERSION == latest ]]; then
+            actual=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+                     | awk -F'"' '/"tag_name":/{print $4; exit}')
+            if [[ -z $actual ]]; then
+              echo "FEHLER: kein Release auf ${REPO} veröffentlicht – zuerst taggen." >&2
+              exit 1
+            fi
+            echo "  latest → $actual"
+            VERSION="$actual"
+          fi
+
           echo "ref=$REF"        >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
