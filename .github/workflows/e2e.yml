@@ -123,9 +123,11 @@ jobs:
 
       - name: Installer ausführen (genau der README-Einzeiler)
         run: |
+          # Kein --no-systemd / --no-nginx: der Installer soll Unit-File und
+          # nginx-Snippet auch ohne laufendes systemctl ablegen, das testen
+          # wir hier explizit mit.
           curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-api.sh" \
-            | sudo bash -s -- \
-                --version "$VERSION" --no-systemd --no-nginx
+            | sudo bash -s -- --version "$VERSION"
         env:
           REF: ${{ steps.pick.outputs.ref }}
           VERSION: ${{ steps.pick.outputs.version }}
@@ -148,6 +150,16 @@ jobs:
           [[ "$(stat -c '%G'  /etc/cert-api)"            == "cert-api" ]]
           test -f /etc/cert-api/config.toml
           [[ "$(stat -c '%a' /etc/cert-api/config.toml)" == "600" ]]
+          # systemd-Unit + Drop-in (auch ohne laufendes systemctl abgelegt)
+          test -f /etc/systemd/system/cert-api.service
+          [[ "$(stat -c '%a' /etc/systemd/system/cert-api.service)" == "644" ]]
+          test -f /etc/systemd/system/cert-api.service.d/override.conf
+          grep -q '^Environment=CERT_API_LIVE_BASE='     /etc/systemd/system/cert-api.service.d/override.conf
+          grep -q '^Environment=CERT_API_ARCHIVE_BASE='  /etc/systemd/system/cert-api.service.d/override.conf
+          # nginx-Snippet
+          test -f /etc/cert-api/nginx/cert-api.conf
+          # add-cert.sh
+          test -x /usr/local/share/cert-api/add-cert.sh
 
       - name: "Asserts: Let's-Encrypt-Rechte"
         run: |
