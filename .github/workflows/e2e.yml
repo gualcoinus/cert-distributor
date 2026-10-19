@@ -24,6 +24,8 @@ on:
 
 permissions:
   contents: read
+  # GITHUB_TOKEN wird im pick-Schritt genutzt, um das anonyme Rate-Limit
+  # auf api.github.com (60/h) zu umgehen – GHA-Runner-IPs sind geteilt.
 
 # Container-Default-Shell ist /bin/sh (=dash auf debian-slim); bash-spezifische
 # Syntax ([[ ]], Arrays) braucht explizites bash.
@@ -54,6 +56,8 @@ jobs:
 
       - name: Quellen ermitteln (Tag → main, Branch-Push/PR → eigener Branch, manuell → inputs)
         id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           EVENT="${{ github.event_name }}"
           case "$EVENT" in
@@ -82,8 +86,11 @@ jobs:
           # "latest" zur echten Tag-Version auflösen – Installer akzeptieren
           # nur konkrete Tags (latest literal ergibt asset=cert-...-latest-...
           # und 404). Die GitHub-API gibt den passenden Tag als tag_name.
+          # GITHUB_TOKEN nutzen, um das anonyme Rate-Limit (60/h pro IP) zu
+          # umgehen – GHA-Runner-IPs sind geteilt.
           if [[ $VERSION == latest ]]; then
-            actual=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+            actual=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                       "https://api.github.com/repos/${REPO}/releases/latest" \
                      | jq -r '.tag_name // empty')
             if [[ -z $actual || $actual == null ]]; then
               echo "FEHLER: kein Release auf ${REPO} veröffentlicht – zuerst taggen." >&2
@@ -107,10 +114,14 @@ jobs:
           chmod 600 /etc/letsencrypt/live/example.com/privkey.pem
 
       - name: Auf Release warten (max. 3 min)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.pick.outputs.version }}
         run: |
           if [[ $VERSION == latest ]]; then exit 0; fi
           for _ in $(seq 1 36); do
             code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
               "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")
             [[ $code == 200 ]] && { echo "Release $VERSION sichtbar"; exit 0; }
             echo "  HTTP $code – warte 5s"
@@ -118,8 +129,6 @@ jobs:
           done
           echo "Release $VERSION wurde nicht veröffentlicht"
           exit 1
-        env:
-          VERSION: ${{ steps.pick.outputs.version }}
 
       - name: Installer ausführen (genau der README-Einzeiler)
         run: |
@@ -221,6 +230,8 @@ jobs:
 
       - name: Quellen ermitteln
         id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           EVENT="${{ github.event_name }}"
           case "$EVENT" in
@@ -246,9 +257,11 @@ jobs:
               echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
           esac
 
-          # "latest" → konkreten Tag auflösen (Installer verstehen kein "latest")
+          # "latest" → konkreten Tag auflösen (Installer verstehen kein "latest").
+          # GITHUB_TOKEN nutzen, um das anonyme Rate-Limit (60/h) zu umgehen.
           if [[ $VERSION == latest ]]; then
-            actual=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+            actual=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                       "https://api.github.com/repos/${REPO}/releases/latest" \
                      | jq -r '.tag_name // empty')
             if [[ -z $actual || $actual == null ]]; then
               echo "FEHLER: kein Release auf ${REPO} veröffentlicht – zuerst taggen." >&2
@@ -262,18 +275,20 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Auf Release warten (max. 3 min)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.pick.outputs.version }}
         run: |
           if [[ $VERSION == latest ]]; then exit 0; fi
           for _ in $(seq 1 36); do
             code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
               "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")
             [[ $code == 200 ]] && { echo "Release $VERSION sichtbar"; exit 0; }
             echo "  HTTP $code – warte 5s"
             sleep 5
           done
           echo "Release $VERSION wurde nicht veröffentlicht"; exit 1
-        env:
-          VERSION: ${{ steps.pick.outputs.version }}
 
       - name: Installer ausführen (genau der README-Einzeiler)
         run: |
