@@ -140,7 +140,7 @@ jobs:
           getent passwd cert-api >/dev/null
           getent group  cert-api >/dev/null
           getent group  ssl-cert >/dev/null
-          id cert-api | tr ' ' '\n' | grep -Fxq '(ssl-cert)'
+          id -Gn cert-api | tr ' ' '\n' | grep -Fxq 'ssl-cert'
           # /etc/cert-api
           test -d /etc/cert-api
           [[ "$(stat -c '%a' /etc/cert-api)"            == "750" ]]

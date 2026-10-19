@@ -183,7 +183,11 @@ elif [[ -n $API_URL_OPT || ${#CERT_ENTRIES[@]} -gt 0 ]]; then
   echo "         'sudo $BIN_NAME --check-only' nutzt die vorhandene Datei." >&2
 fi
 
-if (( DO_CRON )) && command -v systemctl >/dev/null && [[ -d /etc/cron.d ]]; then
+# Cronfile: nur anlegen, wenn /etc/cron.d existiert (vom cron-Daemon gelesen,
+# nicht von systemd – systemctl als Voraussetzung zu pruefen war falsch und
+# hat in containerisierten Umgebungen (Actions, Docker) den Cronjob
+# stillschweigend weggelassen).
+if (( DO_CRON )) && [[ -d /etc/cron.d ]]; then
   cat >/etc/cron.d/cert-sync <<EOF
 # cert-sync – zieht aktuelle Let's-Encrypt-Zertifikate vom cert-api-Server
 SHELL=/bin/bash
