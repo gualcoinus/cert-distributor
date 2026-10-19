@@ -175,6 +175,34 @@ jobs:
           [[ "$(stat -c '%G' /etc/letsencrypt/live)"     == "ssl-cert" ]]
           [[ "$(stat -c '%G' /etc/letsencrypt/archive)"  == "ssl-cert" ]]
 
+      - name: "Asserts: Inhalte (config, service-unit, nginx, binary)"
+        run: |
+          set -eu
+          # config.toml hat eine sinnvolle Vorlage (Loopback-Listen)
+          grep -q '^listen = "127.0.0.1:8443"' /etc/cert-api/config.toml
+          # Service-Unit startet /usr/local/bin/cert-api mit der Config
+          grep -q '^ExecStart=/usr/local/bin/cert-api '      /etc/systemd/system/cert-api.service
+          grep -q '/etc/cert-api/config.toml'                /etc/systemd/system/cert-api.service
+          grep -q '^User=cert-api'                           /etc/systemd/system/cert-api.service
+          # Binary ist ein echtes ELF (kein Stub, keine 0-Byte-Datei):
+          # Magic "\x7fELF" in den ersten 4 Bytes, ohne 'file' als extra dep.
+          head -c4 /usr/local/bin/cert-api | grep -q $'\x7fELF'
+
+      - name: "Asserts: Idempotenz (zweiter Lauf bricht nicht)"
+        run: |
+          set -eu
+          # Vorher: Config-Inhalt merken
+          cfg_before=$(cat /etc/cert-api/config.toml)
+          # Installer erneut aufrufen – bestehende Config darf nicht ueberschrieben werden
+          curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-api.sh" \
+            | sudo bash -s -- --version "$VERSION"
+          cfg_after=$(cat /etc/cert-api/config.toml)
+          [[ "$cfg_before" == "$cfg_after" ]] || { echo "FAIL: config.toml wurde ueberschrieben"; exit 1; }
+          echo "OK  Idempotenz: config.toml unveraendert nach zweitem Lauf"
+        env:
+          REF: ${{ steps.pick.outputs.ref }}
+          VERSION: ${{ steps.pick.outputs.version }}
+
   test-cert-sync:
     name: e2e install-cert-sync
     runs-on: ubuntu-latest
@@ -259,26 +287,58 @@ jobs:
           VERSION: ${{ steps.pick.outputs.version }}
 
 
-      - name: "Asserts: Binary und Verzeichnisse"
+      - name: "Asserts: Binary, Verzeichnisse, Cronfile, Logfile"
         run: |
           set -eu
           test -x /usr/local/bin/cert-sync
+          test -x /usr/local/bin/cert-sync.sh  # Bash-Client
+          # Rust-Binary ist ein echtes ELF (kein Stub, keine 0-Byte-Datei)
+          head -c4 /usr/local/bin/cert-sync | grep -q $'\x7fELF'
+          # Bash-Client hat einen gueltigen Shebang
+          head -c2 /usr/local/bin/cert-sync.sh | grep -q '#!'
           test -d /etc/cert-sync
-          [[ "$(stat -c '%a' /etc/cert-sync)"            == "700" ]]
+          [[ "$(stat -c '%a' /etc/cert-sync)"                 == "700" ]]
+          [[ "$(stat -c '%U' /etc/cert-sync)"                 == "root" ]]
           test -f /etc/cert-sync/cert-sync.toml
           [[ "$(stat -c '%a' /etc/cert-sync/cert-sync.toml)" == "600" ]]
+          # Cronfile mit korrektem Inhalt (cron-Zeit + Binary-Pfad)
           test -f /etc/cron.d/cert-sync
+          [[ "$(stat -c '%a' /etc/cron.d/cert-sync)" == "644" ]]
+          grep -q '^17 3 \* \* \*'                    /etc/cron.d/cert-sync
+          grep -q '/usr/local/bin/cert-sync'          /etc/cron.d/cert-sync
+          grep -q '/etc/cert-sync/cert-sync.toml'     /etc/cron.d/cert-sync
+          # Cron-Beispiele aus dem Release daneben abgelegt
+          test -f /etc/cert-sync/cert-sync.cron.example
+          test -f /etc/cert-sync/cert-sync.sh.cron.example
+          # Logfile existiert (vom Installer touch'ed, schreibbar fuer root)
           test -f /var/log/cert-sync.log
 
       - name: "Asserts: cert-sync.toml-Inhalt"
         run: |
           set -eu
           F=/etc/cert-sync/cert-sync.toml
-          grep -q '^api_url    = "https://certs.test.example"$' "$F"
-          grep -q '^name       = "example.com"$'                "$F"
-          grep -q '^api_key    = "KEY1234"$'                    "$F"
-          grep -q '^target_dir = "/etc/ssl/example.com"$'        "$F"
-          grep -q '^reload_cmd = "nginx -t"$'                    "$F"
+          grep -Fxq 'api_url    = "https://certs.test.example"' "$F"
+          grep -Fxq 'name       = "example.com"'                "$F"
+          grep -Fxq 'api_key    = "KEY1234"'                    "$F"
+          grep -Fxq 'target_dir = "/etc/ssl/example.com"'       "$F"
+          grep -Fxq 'reload_cmd = "nginx -t"'                   "$F"
+          # Default-reload_cmd auf Top-Level (Fallback, falls keine cert-spezifische)
+          grep -q '^reload_cmd = "nginx -t && systemctl reload nginx"' "$F"
+
+      - name: "Asserts: Idempotenz (zweiter Lauf ueberschreibt cert-sync.toml nicht)"
+        run: |
+          set -eu
+          before=$(sha256sum /etc/cert-sync/cert-sync.toml | awk '{print $1}')
+          curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-sync.sh" \
+            | sudo bash -s -- --version "$VERSION" \
+                --api-url "https://certs.test.example" \
+                --cert    "example.com:KEY1234:/etc/ssl/example.com:nginx -t"
+          after=$(sha256sum /etc/cert-sync/cert-sync.toml | awk '{print $1}')
+          [[ "$before" == "$after" ]] || { echo "FAIL: cert-sync.toml wurde ueberschrieben"; exit 1; }
+          echo "OK  Idempotenz: cert-sync.toml unveraendert nach zweitem Lauf"
+        env:
+          REF: ${{ steps.pick.outputs.ref }}
+          VERSION: ${{ steps.pick.outputs.version }}
 
       - name: Cleanup (Cron-Eintrag wieder entfernen)
         if: always()
