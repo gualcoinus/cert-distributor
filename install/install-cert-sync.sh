@@ -26,7 +26,7 @@ BIN_DIR="/usr/local/bin"
 CONF_DIR="/etc/cert-sync"
 BIN_NAME="cert-sync"
 API_URL_OPT=""
-CERT_ENTRIES=()                       # "name|key|target|reload"
+CERT_ENTRIES=()                       # "name:key:target:reload" (Doku: --cert NAME:KEY:TARGET[:RELOAD])
 DO_CRON=1
 CRON_TIME="17 3 * * *"
 DO_DRYRUN=0
@@ -62,6 +62,9 @@ for bin in curl tar awk grep sha256sum; do
 done
 
 API_REPO="https://api.github.com/repos/${REPO}"
+# Asset-Downloads liegen unter github.com (api.github.com antwortet mit 404),
+# die curl mit -L automatisch auf den Azure-CDN-Endpunkt weiterleitet.
+DOWNLOAD_BASE="https://github.com/${REPO}"
 
 detect_arch() {
   case "$(uname -m)" in
@@ -95,8 +98,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "==> Lade $ASSET"
-curl -fsSL -o "$TMP/$ASSET"             "$API_REPO/releases/download/$TAG/$ASSET"
-curl -fsSL -o "$TMP/$ASSET.sha256"      "$API_REPO/releases/download/$TAG/$ASSET.sha256"
+curl -fsSL -o "$TMP/$ASSET"             "$DOWNLOAD_BASE/releases/download/$TAG/$ASSET"
+curl -fsSL -o "$TMP/$ASSET.sha256"      "$DOWNLOAD_BASE/releases/download/$TAG/$ASSET.sha256"
 ( cd "$TMP" && sha256sum -c "$ASSET.sha256" )
 
 tar -xzf "$TMP/$ASSET" -C "$TMP"
@@ -104,22 +107,29 @@ PKG_DIR="$(find "$TMP" -maxdepth 1 -type d -name "cert-sync-${TAG}-${ARCH}" | he
 
 install -m 0755 "$PKG_DIR/cert-sync" "$BIN_DIR/$BIN_NAME"
 # alternativer Bash-Client aus dem selben Paket
-[[ -f $PKG_DIR/scripts/cert-sync.sh ]] && install -m 0755 "$PKG_DIR/scripts/cert-sync.sh" "$BIN_DIR/cert-sync.sh" || true
-# Cron-Beispiel aus dem Paket daneben ablegen
+if [[ -f $PKG_DIR/scripts/cert-sync.sh ]]; then
+  install -m 0755 "$PKG_DIR/scripts/cert-sync.sh" "$BIN_DIR/cert-sync.sh"
+elif [[ -f $PKG_DIR/cert-sync.sh ]]; then
+  install -m 0755 "$PKG_DIR/cert-sync.sh" "$BIN_DIR/cert-sync.sh"
+fi
+
+# Config-Verzeichnis mit restriktiven Rechten (frueh anlegen, damit die
+# Cron-Beispiele darunter abgelegt werden koennen).
+install -d -m 0700 -o root -g root "$CONF_DIR"
+
 # Cron-Beispiele aus dem Paket ablegen. Im neuen Split-Tarball liegen beide
 # Varianten unter unterschiedlichen Namen: cert-sync.cron.example (Rust)
 # und cert-sync.sh.cron.example (Bash-Alternative).
 if [[ -f $PKG_DIR/cert-sync.cron.example ]]; then
-  install -m 0644 "$PKG_DIR/cert-sync.cron.example" /etc/cert-sync/cert-sync.cron.example
-elif [[ -f $PKG_DIR/scripts/cert-sync.cron.example ]]; then
-  install -m 0644 "$PKG_DIR/scripts/cert-sync.cron.example" /etc/cert-sync/cert-sync.cron.example
+  install -m 0644 "$PKG_DIR/cert-sync.cron.example" "$CONF_DIR/cert-sync.cron.example"
 fi
 if [[ -f $PKG_DIR/cert-sync.sh.cron.example ]]; then
-  install -m 0644 "$PKG_DIR/cert-sync.sh.cron.example" /etc/cert-sync/cert-sync.sh.cron.example
+  install -m 0644 "$PKG_DIR/cert-sync.sh.cron.example" "$CONF_DIR/cert-sync.sh.cron.example"
 fi
-
-# Config-Verzeichnis mit restriktiven Rechten
-install -d -m 0700 -o root -g root "$CONF_DIR"
+# Legacy-Pfad: alte Releases hatten das Beispiel unter scripts/.
+if [[ -f $PKG_DIR/scripts/cert-sync.cron.example ]]; then
+  install -m 0644 "$PKG_DIR/scripts/cert-sync.cron.example" "$CONF_DIR/cert-sync.cron.example"
+fi
 
 CONFIG="$CONF_DIR/cert-sync.toml"
 write_config() {
@@ -132,9 +142,9 @@ write_config() {
       local entry name key target reload
       for entry in "${CERT_ENTRIES[@]:-}"; do
         [[ -z $entry ]] && continue
-        IFS='|' read -r name key target reload <<<"$entry"
+        IFS=':' read -r name key target reload <<<"$entry"
         if [[ -z $name || -z $key || -z $target ]]; then
-          echo "Ungültiges --cert-Argument: '$entry' (erwartet: name|key|target_dir optional mit |reload_cmd)" >&2
+          echo "Ungültiges --cert-Argument: '$entry' (erwartet: name:key:target_dir[:reload_cmd])" >&2
           return 1
         fi
         printf '[[certificates]]\n'
@@ -173,7 +183,11 @@ elif [[ -n $API_URL_OPT || ${#CERT_ENTRIES[@]} -gt 0 ]]; then
   echo "         'sudo $BIN_NAME --check-only' nutzt die vorhandene Datei." >&2
 fi
 
-if (( DO_CRON )) && command -v systemctl >/dev/null && [[ -d /etc/cron.d ]]; then
+# Cronfile: nur anlegen, wenn /etc/cron.d existiert (vom cron-Daemon gelesen,
+# nicht von systemd – systemctl als Voraussetzung zu pruefen war falsch und
+# hat in containerisierten Umgebungen (Actions, Docker) den Cronjob
+# stillschweigend weggelassen).
+if (( DO_CRON )) && [[ -d /etc/cron.d ]]; then
   cat >/etc/cron.d/cert-sync <<EOF
 # cert-sync – zieht aktuelle Let's-Encrypt-Zertifikate vom cert-api-Server
 SHELL=/bin/bash

@@ -1,0 +1,274 @@
+name: e2e-installers
+
+# End-to-End-Tests für die Install-Skripte. Zwei isolierte Container,
+# einer pro Installer; jeder führt exakt den Einzeiler aus install/README.md
+# aus und prüft die resultierenden Artefakte (Binary, User, Gruppe,
+# Pfade, Rechte, Config-Inhalt).
+#
+on:
+  push:
+    branches: [main, ci/split-releases-coverage]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, ci/split-releases-coverage]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch mit den Installer-Skripten (Default: main)"
+        required: false
+        default: main
+      version:
+        description: "Zu testende Release-Version (Default: latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Container-Default-Shell ist /bin/sh (=dash auf debian-slim); bash-spezifische
+# Syntax ([[ ]], Arrays) braucht explizites bash.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-cert-api:
+    name: e2e install-cert-api
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+      options: --privileged
+    env:
+      REPO: gualcoinus/cert-distributor
+    steps:
+      - name: Benötigte Tools installieren
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y -qq --no-install-recommends \
+              bash curl jq tar openssl ca-certificates sudo passwd
+
+      - name: Quellen ermitteln (Tag → main, Branch-Push/PR → eigener Branch, manuell → inputs)
+        id: pick
+        run: |
+          EVENT="${{ github.event_name }}"
+          case "$EVENT" in
+            push)
+              if [[ "${{ github.ref_type }}" == tag ]]; then
+                REF="main"                       # gemergter Code steht auf main
+                VERSION="${GITHUB_REF_NAME#refs/tags/}"
+              else
+                REF="${{ github.ref_name }}"     # Branch-Push: Installer-Skripte direkt vom Branch
+                VERSION="latest"                 # Tarball vom aktuell veroeffentlichten Release
+              fi
+              ;;
+            pull_request)
+              REF="${{ github.head_ref }}"       # PR-Quelle: dort liegen die Skripte
+              VERSION="latest"
+              ;;
+            workflow_dispatch)
+              REF="${{ inputs.ref }}"
+              VERSION="${{ inputs.version }}"
+              [[ -z $VERSION ]] && VERSION="latest"
+              ;;
+            *)
+              echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
+          esac
+
+          # "latest" zur echten Tag-Version auflösen – Installer akzeptieren
+          # nur konkrete Tags (latest literal ergibt asset=cert-...-latest-...
+          # und 404). Die GitHub-API gibt den passenden Tag als tag_name.
+          if [[ $VERSION == latest ]]; then
+            actual=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+                     | jq -r '.tag_name // empty')
+            if [[ -z $actual || $actual == null ]]; then
+              echo "FEHLER: kein Release auf ${REPO} veröffentlicht – zuerst taggen." >&2
+              exit 1
+            fi
+            echo "  latest → $actual"
+            VERSION="$actual"
+          fi
+
+          echo "ref=$REF"        >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT"    >> "$GITHUB_OUTPUT"
+
+      - name: Dummy-Let's-Encrypt-Struktur anlegen
+        run: |
+          mkdir -p /etc/letsencrypt/live/example.com /etc/letsencrypt/archive/example.com
+          : > /etc/letsencrypt/live/example.com/fullchain.pem
+          : > /etc/letsencrypt/live/example.com/privkey.pem
+          : > /etc/letsencrypt/archive/example.com/fullchain1.pem
+          chmod 644 /etc/letsencrypt/live/example.com/fullchain.pem
+          chmod 600 /etc/letsencrypt/live/example.com/privkey.pem
+
+      - name: Auf Release warten (max. 3 min)
+        run: |
+          if [[ $VERSION == latest ]]; then exit 0; fi
+          for _ in $(seq 1 36); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")
+            [[ $code == 200 ]] && { echo "Release $VERSION sichtbar"; exit 0; }
+            echo "  HTTP $code – warte 5s"
+            sleep 5
+          done
+          echo "Release $VERSION wurde nicht veröffentlicht"
+          exit 1
+        env:
+          VERSION: ${{ steps.pick.outputs.version }}
+
+      - name: Installer ausführen (genau der README-Einzeiler)
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-api.sh" \
+            | sudo bash -s -- \
+                --version "$VERSION" --no-systemd --no-nginx
+        env:
+          REF: ${{ steps.pick.outputs.ref }}
+          VERSION: ${{ steps.pick.outputs.version }}
+
+
+      - name: "Asserts: Binary, User, Gruppe, Verzeichnisse"
+        run: |
+          set -eu
+          # Binary
+          test -x /usr/local/bin/cert-api
+          # User & Gruppe
+          getent passwd cert-api >/dev/null
+          getent group  cert-api >/dev/null
+          getent group  ssl-cert >/dev/null
+          id -Gn cert-api | tr ' ' '\n' | grep -Fxq 'ssl-cert'
+          # /etc/cert-api
+          test -d /etc/cert-api
+          [[ "$(stat -c '%a' /etc/cert-api)"            == "750" ]]
+          [[ "$(stat -c '%U'  /etc/cert-api)"            == "root" ]]
+          [[ "$(stat -c '%G'  /etc/cert-api)"            == "cert-api" ]]
+          test -f /etc/cert-api/config.toml
+          [[ "$(stat -c '%a' /etc/cert-api/config.toml)" == "600" ]]
+
+      - name: "Asserts: Let's-Encrypt-Rechte"
+        run: |
+          set -eu
+          # privkey.pem muss 640 und Gruppe ssl-cert haben
+          for d in /etc/letsencrypt/live /etc/letsencrypt/archive; do
+            while IFS= read -r -d '' f; do
+              [[ "$(stat -c '%a' "$f")" == "640" ]] || { echo "bad mode on $f"; exit 1; }
+              [[ "$(stat -c '%G' "$f")" == "ssl-cert" ]] || { echo "bad group on $f"; exit 1; }
+            done < <(find "$d" -type f -name 'privkey*.pem' -print0)
+          done
+          # Die LE-Pfade selbst müssen der Gruppe ssl-cert gehören
+          [[ "$(stat -c '%G' /etc/letsencrypt/live)"     == "ssl-cert" ]]
+          [[ "$(stat -c '%G' /etc/letsencrypt/archive)"  == "ssl-cert" ]]
+
+  test-cert-sync:
+    name: e2e install-cert-sync
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+      options: --privileged
+    env:
+      REPO: gualcoinus/cert-distributor
+    steps:
+      - name: Benötigte Tools installieren
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y -qq --no-install-recommends \
+              bash curl jq tar openssl ca-certificates sudo passwd
+
+      - name: Quellen ermitteln
+        id: pick
+        run: |
+          EVENT="${{ github.event_name }}"
+          case "$EVENT" in
+            push)
+              if [[ "${{ github.ref_type }}" == tag ]]; then
+                REF="main"
+                VERSION="${GITHUB_REF_NAME#refs/tags/}"
+              else
+                REF="${{ github.ref_name }}"
+                VERSION="latest"
+              fi
+              ;;
+            pull_request)
+              REF="${{ github.head_ref }}"
+              VERSION="latest"
+              ;;
+            workflow_dispatch)
+              REF="${{ inputs.ref }}"
+              VERSION="${{ inputs.version }}"
+              [[ -z $VERSION ]] && VERSION="latest"
+              ;;
+            *)
+              echo "Unbekannter Event-Typ: $EVENT" >&2; exit 1 ;;
+          esac
+
+          # "latest" → konkreten Tag auflösen (Installer verstehen kein "latest")
+          if [[ $VERSION == latest ]]; then
+            actual=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+                     | jq -r '.tag_name // empty')
+            if [[ -z $actual || $actual == null ]]; then
+              echo "FEHLER: kein Release auf ${REPO} veröffentlicht – zuerst taggen." >&2
+              exit 1
+            fi
+            echo "  latest → $actual"
+            VERSION="$actual"
+          fi
+
+          echo "ref=$REF"        >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Auf Release warten (max. 3 min)
+        run: |
+          if [[ $VERSION == latest ]]; then exit 0; fi
+          for _ in $(seq 1 36); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")
+            [[ $code == 200 ]] && { echo "Release $VERSION sichtbar"; exit 0; }
+            echo "  HTTP $code – warte 5s"
+            sleep 5
+          done
+          echo "Release $VERSION wurde nicht veröffentlicht"; exit 1
+        env:
+          VERSION: ${{ steps.pick.outputs.version }}
+
+      - name: Installer ausführen (genau der README-Einzeiler)
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${REPO}/${REF}/install/install-cert-sync.sh" \
+            | sudo bash -s -- \
+                --version "$VERSION" \
+                --api-url "https://certs.test.example" \
+                --cert    "example.com:KEY1234:/etc/ssl/example.com:nginx -t"
+        env:
+          REF: ${{ steps.pick.outputs.ref }}
+          VERSION: ${{ steps.pick.outputs.version }}
+
+
+      - name: "Asserts: Binary und Verzeichnisse"
+        run: |
+          set -eu
+          test -x /usr/local/bin/cert-sync
+          test -d /etc/cert-sync
+          [[ "$(stat -c '%a' /etc/cert-sync)"            == "700" ]]
+          test -f /etc/cert-sync/cert-sync.toml
+          [[ "$(stat -c '%a' /etc/cert-sync/cert-sync.toml)" == "600" ]]
+          test -f /etc/cron.d/cert-sync
+          test -f /var/log/cert-sync.log
+
+      - name: "Asserts: cert-sync.toml-Inhalt"
+        run: |
+          set -eu
+          F=/etc/cert-sync/cert-sync.toml
+          grep -q '^api_url    = "https://certs.test.example"$' "$F"
+          grep -q '^name       = "example.com"$'                "$F"
+          grep -q '^api_key    = "KEY1234"$'                    "$F"
+          grep -q '^target_dir = "/etc/ssl/example.com"$'        "$F"
+          grep -q '^reload_cmd = "nginx -t"$'                    "$F"
+
+      - name: Cleanup (Cron-Eintrag wieder entfernen)
+        if: always()
+        run: |
+          sudo rm -f /etc/cron.d/cert-sync || true

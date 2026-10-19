@@ -59,6 +59,9 @@ for bin in curl tar awk grep sha256sum openssl; do
 done
 
 API_REPO="https://api.github.com/repos/${REPO}"
+# Asset-Downloads liegen unter github.com (api.github.com antwortet mit 404),
+# die curl mit -L automatisch auf den Azure-CDN-Endpunkt weiterleitet.
+DOWNLOAD_BASE="https://github.com/${REPO}"
 
 # --- Architektur erkennen ------------------------------------------------------
 detect_arch() {
@@ -104,8 +107,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "==> Lade $ASSET"
-curl -fsSL -o "$TMP/$ASSET" "$API_REPO/releases/download/$TAG/$ASSET"
-curl -fsSL -o "$TMP/$ASSET.sha256" "$API_REPO/releases/download/$TAG/$ASSET.sha256"
+curl -fsSL -o "$TMP/$ASSET" "$DOWNLOAD_BASE/releases/download/$TAG/$ASSET"
+curl -fsSL -o "$TMP/$ASSET.sha256" "$DOWNLOAD_BASE/releases/download/$TAG/$ASSET.sha256"
 ( cd "$TMP" && sha256sum -c "$ASSET.sha256" )
 
 tar -xzf "$TMP/$ASSET" -C "$TMP"
